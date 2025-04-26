@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  base_donnees:
+    image: mysql:8.0
+    container_name: bdd_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_nexgen
+      MYSQL_DATABASE: foyer_db
+      MYSQL_USER: jenkins_user
+      MYSQL_PASSWORD: S3cur3P@ss
+    volumes:
+      - donnees_mysql_${BUILD_NUMBER}:/var/lib/mysql
+    ports:
+      - "3315:3306"
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_nexgen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  service_backend:
+    image: ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER}
+    container_name: backend_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://base_donnees:3306/foyer_db?createDatabaseIfNotExist=true&useSSL=false
+      SPRING_DATASOURCE_USERNAME: jenkins_user
+      SPRING_DATASOURCE_PASSWORD: S3cur3P@ss
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    ports:
+      - "8089:8089"
+    depends_on:
+      base_donnees:
+        condition: service_healthy
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+
+  service_frontend:
+    build:
+     context: ./Frontend
+     dockerfile: Dockerfile
+    image: ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER}
+    container_name: frontend_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      - NGINX_PORT=80
+      - BACKEND_SERVICE=service_backend
+      - BACKEND_PORT=8089
+    ports:
+      - "4200:80"
+    depends_on:
+      - service_backend
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+
+networks:
+  reseau_nexgen_${BUILD_NUMBER}:
+    driver: bridge
+
+volumes:
+  donnees_mysql_${BUILD_NUMBER}:

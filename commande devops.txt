@@ -1,0 +1,30 @@
+docker rm -f frontend_nexgen_145 backend_nexgen_145 bdd_nexgen_145
+
+(ntaya7 container juste nbadel e num) 
+-------------------------------------------------------------
+docker start nexus
+(lezem nkhadem nexus w sonar)
+--------------------------------------------------------------
+test postman:
+get:
+http://localhost:8089/foyer/foyer/findAll
+
+-----------------------------
+post:
+http://localhost:8089/foyer/foyer/addOrUpdate
+
+body :
+{
+  "nomFoyer": "hous",
+  "capaciteFoyer": 150,
+  "blocs": [
+    {
+      "nomBloc": "Bloc C",
+      "capaciteBloc": 50
+    },
+    {
+      "nomBloc": "Bloc k",
+      "capaciteBloc": 75
+    }
+  ]
+}

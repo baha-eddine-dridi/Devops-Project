@@ -1,0 +1,633 @@
+pipeline {
+    agent any
+
+    environment {
+        GITHUB_REPO = 'https://github.com/Houssine2001/NexGen_Coders_4TWIN6_2425.git'
+        MAVEN_REPO = "${env.WORKSPACE}/.m2/repository"
+        DB_HOST = '172.27.222.141'
+        MAVEN_OPTS = "-Dmaven.repo.local=${MAVEN_REPO}"
+        PROJECT = 'NexGen_Coders_4TWIN6_2425'
+        TEAM = '4TWIN6'
+        GROUP = 'NexGen_Coders'
+        DELIVERABLE = "${TEAM}-${GROUP}-${PROJECT}"
+        
+        // Docker related variables
+        DOCKER_HUB_REPO = "bahadridi2001/nexgen-foyer"
+        DOCKER_IMAGE_TAG = "${env.BUILD_NUMBER}"
+        DOCKER_USERNAME = "bahadridi2001"
+    }
+
+    stages {
+        stage('Environment Setup') {
+            steps {
+                script {
+                    echo 'Checking Maven and Java versions...'
+                    sh 'mvn -version'
+                    sh 'java -version'
+                    sh 'docker --version'
+                }
+            }
+        }
+
+        stage('Clone Repository') {
+    steps {
+        script {
+            echo 'Cloning the repository...'
+            checkout([$class: 'GitSCM', branches: [[name: 'refs/heads/Baha_Eddine_Dridi_Gestion_Foyer']],
+                      userRemoteConfigs: [[url: GITHUB_REPO, credentialsId: 'github-token']]])
+            
+            sh 'ls -la'
+            sh 'cat pom.xml'
+            sh 'find . -maxdepth 2 -type d'
+        }
+    }
+}
+
+        stage('Maven Build') {
+            steps {
+                script {
+                    echo 'Building project using Maven...'
+                    sh """
+                    mvn clean install -Dspring.datasource.url=jdbc:mysql://${DB_HOST}:3306/foyer \\
+                    -Dspring.datasource.username=jenkins_user \\
+                    -Dspring.datasource.password=S3cur3P@ss
+                    """
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                script {
+                    echo 'Running tests using Maven...'
+                    sh """
+                    mvn test -Dspring.datasource.url=jdbc:mysql://${DB_HOST}:3306/foyer \\
+                    -Dspring.datasource.username=jenkins_user \\
+                    -Dspring.datasource.password=S3cur3P@ss
+                    """
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    sh """
+                    mvn sonar:sonar \\
+                    -Dsonar.host.url=http://172.27.222.141:9000 \\
+                    -Dsonar.login=${SONAR_TOKEN} \\
+                    -Dsonar.projectKey=${PROJECT} \\
+                    -Dsonar.projectName="${GROUP}-${PROJECT}"
+                    """
+                }
+            }
+        }
+
+        stage('Package Project') {
+            steps {
+                script {
+                    echo 'Packaging the project...'
+                    sh """
+                    mvn clean package -Ddeliverable.name=${DELIVERABLE}
+                    """
+                }
+            }
+        }
+        
+        stage('Prepare Maven Settings for Nexus') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'nexus-credentials', 
+                                                  usernameVariable: 'NEXUS_USERNAME', 
+                                                  passwordVariable: 'NEXUS_PASSWORD')]) {
+                    writeFile file: '.m2/settings.xml', text: """
+                    <settings>
+                        <servers>
+                            <server>
+                                <id>snapshotRepo</id>
+                                <username>${NEXUS_USERNAME}</username>
+                                <password>${NEXUS_PASSWORD}</password>
+                            </server>
+                        </servers>
+                    </settings>
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Nexus') {
+            steps {
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        sh """
+                        mvn deploy -DskipTests \\
+                        -Dspring.datasource.url=jdbc:mysql://${DB_HOST}:3306/foyer \\
+                        -Dspring.datasource.username=jenkins_user \\
+                        -Dspring.datasource.password=S3cur3P@ss \\
+                        --settings .m2/settings.xml
+                        """
+                    }
+                }
+            }
+        }
+        
+      /* stage('Clean Environment') {
+    steps {
+        script {
+            sh '''
+                docker-compose -p ${BUILD_NUMBER} down --remove-orphans --volumes --rmi all || true
+                docker system prune -af
+            '''
+        }
+    }
+}
+
+stage('Nettoyage Environnement') {
+    steps {
+        script {
+            sh """
+            # Kill any process using our required ports
+            for PORT in 80 86 8087 3307 3308; do
+                lsof -ti:\${PORT} | xargs -r kill -9 || true
+            done
+            
+            # Remove any container named frontend or similar
+            docker rm -f frontend backend mysql || true
+            docker rm -f \$(docker ps -a | grep 'nexgen_' | awk '{print \$1}') || true
+            
+            # Arrêter tout conteneur existant
+            docker-compose down --volumes --remove-orphans || true
+            
+            # Nettoyage des ressources inutilisées
+            docker system prune -af --volumes || true
+            
+            # Téléchargement des images de base
+            docker pull eclipse-temurin:17-jre-alpine
+            docker pull mysql:8.0
+            docker pull nginx:alpine
+            """
+        }
+    }
+}*/
+
+/*stage('Construction Images Docker') {
+    steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD')]) {
+            script {
+                // Create Dockerfiles with DNS config inside
+                writeFile file: 'Dockerfile.backend', text: '''
+FROM maven:3.8.4-openjdk-17 AS construction
+WORKDIR /projet
+
+# DNS configuration inside the container
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+
+# Maven settings for better connectivity
+RUN mkdir -p ~/.m2 && \
+    echo '<settings><mirrors><mirror><id>central-secure</id><url>https://repo1.maven.org/maven2/</url><mirrorOf>central</mirrorOf></mirror></mirrors></settings>' > ~/.m2/settings.xml
+
+# Fix Spring Boot version
+COPY pom.xml .
+RUN sed -i 's/<version>3.4.2<\\/version>/<version>3.2.3<\\/version>/g' pom.xml || true
+RUN mvn dependency:go-offline -B || echo "Continuing with build despite dependency issues"
+
+COPY src ./src
+COPY .env ./
+RUN mvn package -DskipTests || echo "Build failed, creating empty JAR" && touch empty.jar && mkdir -p target && cp empty.jar target/application.jar
+
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /application
+COPY --from=construction /projet/target/*.jar application.jar
+ENV JAVA_OPTS=""
+EXPOSE 8087
+ENTRYPOINT ["java", "-jar", "application.jar"]
+'''
+
+                writeFile file: 'Dockerfile.frontend', text: '''
+FROM nginx:alpine
+WORKDIR /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN echo "<html><body><h1>NexGen Foyer Frontend</h1><p>Application deployed successfully</p></body></html>" > index.html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+'''
+
+                writeFile file: 'nginx.conf', text: '''
+server {
+    listen 80;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/foyer {
+        proxy_pass http://service_backend:8087/foyer/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+'''
+
+                // Build without unsupported flags
+                sh """
+                echo "=== Building backend image ==="
+                docker build -t ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER} -f Dockerfile.backend .
+                
+                echo "=== Building frontend image ==="
+                docker build -t ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER} -f Dockerfile.frontend .
+                """
+            }
+        }
+    }
+}*/
+
+stage('Construction Images Docker') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD')]) {
+                    script {
+                        // Print the pom.xml to verify its contents
+                        sh 'cat pom.xml'
+
+                        // Use the provided Dockerfile for the backend
+                        writeFile file: 'Dockerfile.backend', text: '''
+FROM maven:3.8-openjdk-17 AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline
+
+COPY src ./src
+COPY .env .
+RUN mvn clean package -DskipTests
+
+FROM openjdk:17
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+COPY .env .
+EXPOSE 8089
+ENTRYPOINT ["java", "-jar", "app.jar"]
+'''
+
+                        // Use the improved Dockerfile for the frontend
+                        writeFile file: 'Dockerfile.frontend', text: '''
+FROM nginx:alpine
+WORKDIR /usr/share/nginx/html
+
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+
+RUN echo '<html><body style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;"><h1>NexGen Foyer Application</h1><p>Version: ${BUILD_NUMBER}</p><hr><h2>Liste des Foyers</h2><div id="content">Chargement des foyers...</div><hr><h2>Rechercher par ID</h2><div><input type="number" id="foyerId" placeholder="ID du foyer" min="1"><button onclick="findById()">Rechercher</button><div id="result" style="margin-top: 10px;"></div></div><script>fetch("/api/foyer/findAll").then(r=>r.json()).then(data=>{let html = "<ul>";data.forEach(foyer => {html += `<li>Foyer: ${foyer.nomFoyer} - Capacité: ${foyer.capaciteFoyer}</li>`;});html += "</ul>";document.getElementById("content").innerHTML = html;}).catch(e=>{document.getElementById("content").innerHTML="Erreur: " + e.message;});function findById(){const id=document.getElementById("foyerId").value;if(!id){alert("Veuillez entrer un ID");return;}document.getElementById("result").innerHTML="Recherche en cours...";fetch(`/api/foyer/findById?id=${id}`).then(r=>{if(!r.ok)throw new Error(`Erreur ${r.status}`);return r.json();}).then(data=>{document.getElementById("result").innerHTML=`<div><h3>Résultat:</h3><p>ID: ${data.idFoyer}</p><p>Nom: ${data.nomFoyer}</p><p>Capacité: ${data.capaciteFoyer}</p></div>`;}).catch(e=>{document.getElementById("result").innerHTML="Erreur: " + e.message;});}</script></body></html>' > index.html
+     
+              
+ENV NGINX_PORT=80
+ENV BACKEND_SERVICE=service_backend
+ENV BACKEND_PORT=8089
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+'''
+
+                        writeFile file: 'nginx.conf', text: '''
+server {
+    listen ${NGINX_PORT};
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log debug;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/foyer {
+        proxy_pass http://${BACKEND_SERVICE}:${BACKEND_PORT}/foyer/foyer/;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+'''
+
+                        sh """
+                            echo "=== Building backend image ==="
+                            docker build --network host -t ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER} -f Dockerfile.backend .
+                            echo "=== Building frontend image ==="
+                            docker build --network host -t ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER} -f Dockerfile.frontend .
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Publication Images Docker') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD')]) {
+                    sh """
+                    # Connexion à Docker Hub
+                    echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
+                    
+                    # Publication des images
+                    docker push ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER}
+                    docker push ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER}
+                    
+                    # Tags additionnels
+                    docker tag ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER} ${DOCKER_USERNAME}/nexgen-backend:latest
+                    docker tag ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER} ${DOCKER_USERNAME}/nexgen-frontend:latest
+                    docker push ${DOCKER_USERNAME}/nexgen-backend:latest
+                    docker push ${DOCKER_USERNAME}/nexgen-frontend:latest
+                    """
+                }
+            }
+        }
+
+        stage('Déploiement Application') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD')]) {
+                    script {
+                        writeFile file: 'docker-compose.yml', text: """
+version: '3.8'
+
+services:
+  base_donnees:
+    image: mysql:8.0
+    container_name: bdd_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_nexgen
+      MYSQL_DATABASE: foyer_db
+      MYSQL_USER: jenkins_user
+      MYSQL_PASSWORD: S3cur3P@ss
+    volumes:
+      - donnees_mysql_${BUILD_NUMBER}:/var/lib/mysql
+    ports:
+      - "3315:3306"
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_nexgen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  service_backend:
+    image: ${DOCKER_USERNAME}/nexgen-backend:${BUILD_NUMBER}
+    container_name: backend_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://base_donnees:3306/foyer_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: jenkins_user
+      SPRING_DATASOURCE_PASSWORD: S3cur3P@ss
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      JAVA_OPTS: ""
+    ports:
+      - "8089:8089"
+    depends_on:
+      base_donnees:
+        condition: service_healthy
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+    entrypoint: ["java", "-jar", "/app/app.jar"]
+
+  service_frontend:
+    image: ${DOCKER_USERNAME}/nexgen-frontend:${BUILD_NUMBER}
+    container_name: frontend_nexgen_${BUILD_NUMBER}
+    restart: unless-stopped
+    environment:
+      - NGINX_PORT=80
+      - BACKEND_SERVICE=service_backend
+      - BACKEND_PORT=8089
+      - BUILD_NUMBER=${BUILD_NUMBER}
+    ports:
+      - "4200:80"
+    depends_on:
+      - service_backend
+    networks:
+      - reseau_nexgen_${BUILD_NUMBER}
+
+networks:
+  reseau_nexgen_${BUILD_NUMBER}:
+    name: reseau_nexgen_${BUILD_NUMBER}
+    driver: bridge
+
+volumes:
+  donnees_mysql_${BUILD_NUMBER}:
+    name: donnees_mysql_${BUILD_NUMBER}
+"""
+                        
+                        sh """
+                        # Kill processes holding onto ports 80, 86, or 89
+                        lsof -ti:80 | xargs -r kill -9 || true
+                        lsof -ti:86 | xargs -r kill -9 || true
+                        lsof -ti:89 | xargs -r kill -9 || true
+                        
+                        # Find containers possibly using these ports
+                        OLD_CONTAINERS=\$(docker ps -q -f publish=80 -f publish=86 -f publish=89)
+                        if [ ! -z "\$OLD_CONTAINERS" ]; then
+                            docker stop \$OLD_CONTAINERS || true
+                            docker rm \$OLD_CONTAINERS || true
+                        fi
+                        
+                        # Stop and remove related containers
+                        docker rm -f frontend backend mysql || true
+                        docker rm -f bdd_nexgen_${BUILD_NUMBER} backend_nexgen_${BUILD_NUMBER} frontend_nexgen_${BUILD_NUMBER} || true
+                        
+                        # Remove related networks
+                        docker network rm reseau_nexgen_${BUILD_NUMBER} || true
+                        
+                        # Start fresh deployment with explicit project name
+                        docker-compose -p nexgen_${BUILD_NUMBER} up -d
+                        
+                        # Verify port mapping
+                        echo "====== Port Mappings ======"
+                        docker port frontend_nexgen_${BUILD_NUMBER}
+                        docker port backend_nexgen_${BUILD_NUMBER}
+                        
+                        sleep 5
+                        docker ps
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Vérification Déploiement') {
+            steps {
+                script {
+                    sh """
+                        # Attente stabilisation
+                        sleep 60
+                        
+                        # Vérification des conteneurs
+                        echo "====== État des Conteneurs ======"
+                        docker ps | grep nexgen_${BUILD_NUMBER}
+                        
+                        # Vérification des logs
+                        echo "====== Logs Frontend ======"
+                        docker logs frontend_nexgen_${BUILD_NUMBER} 2>&1 | tail -20
+                        
+                        echo "====== Logs Backend ======"
+                        docker logs backend_nexgen_${BUILD_NUMBER} 2>&1 | tail -20
+                        
+                        echo "====== Port Mappings ======"
+                        docker port frontend_nexgen_${BUILD_NUMBER}
+                        docker port backend_nexgen_${BUILD_NUMBER}
+                        
+                        # Test des endpoints on localhost
+                        echo "====== Test Frontend ======"
+                        curl -I http://localhost:4200 || echo "Frontend non accessible sur port 89"
+                        
+                        echo "====== Test Backend ======"
+                        curl -I http://localhost:8089/foyer/foyer/findAll || echo "Backend non accessible"
+                        
+                        echo "====== Test API via Frontend ======"
+                        curl -I http://localhost:4200/api/foyer/findAll || echo "API via Frontend non accessible"
+                    """
+                }
+            }
+        }
+        
+        
+        
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+    }
+    
+    
+    
+    
+    
+    
+    
+                post {
+        success {
+            mail to: 'bahaeddinedridi1@gmail.com',
+                 subject: "Build Successful: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: """
+                 Bonjour,
+
+                 Le build ${env.JOB_NAME} #${env.BUILD_NUMBER} s'est terminé avec succès.
+                 Projet: ${PROJECT}
+                 Équipe: ${TEAM}
+                 Livrable: ${DELIVERABLE}
+                 
+                 Docker Images:
+                 - Backend: ${DOCKER_HUB_REPO}-backend:${DOCKER_IMAGE_TAG}
+                 - Frontend: ${DOCKER_HUB_REPO}-frontend:${DOCKER_IMAGE_TAG}
+
+                 Détails du build:
+                 - URL du build: ${env.BUILD_URL}
+                 - Date: ${new Date()}
+
+                 Cordialement,
+                 Jenkins
+                 """
+        }
+        
+        failure {
+            mail to: 'bahaeddinedridi1@gmail.com',
+                 subject: "Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: """
+                 Bonjour,
+
+                 Le build ${env.JOB_NAME} #${env.BUILD_NUMBER} a échoué.
+                 Projet: ${PROJECT}
+                 
+                 Veuillez vérifier les logs pour plus de détails:
+                 - URL du build: ${env.BUILD_URL}
+                 - Date: ${new Date()}
+
+                 Cordialement,
+                 Jenkins
+                 """
+        }
+        
+        always {
+            script {
+                try {
+                    def namespace = "myapp-${env.BUILD_NUMBER}"
+                    sh """
+                        cd ${env.WORKSPACE}
+                        if [ -f docker-compose.yml ]; then
+                            docker-compose -p ${namespace} down -v || true
+                        fi
+                        docker rm -f mysql-db-${env.BUILD_NUMBER} backend-service-${env.BUILD_NUMBER} frontend-service-${env.BUILD_NUMBER} || true
+                        docker network rm ${namespace}_app-network || true
+                        docker volume rm ${namespace}_mysql-data || true
+                        docker system prune -f --volumes || true
+                    """
+                } catch (Exception e) {
+                    echo "Warning: Docker cleanup failed: ${e.message}"
+                }
+                cleanWs()
+            }
+        }
+    } 
+
+    
+    
+    
+    
+    
+}
+
+
+
+
+
+
+
+   // } // End of stages block
+
+    
+    
+  /* post {
+    always {
+        script {
+            try {
+                sh """
+                    # Comprehensive cleanup
+                    docker-compose -p nexgen_${BUILD_NUMBER} down --volumes --remove-orphans || true
+                    docker rm -f bdd_nexgen_${BUILD_NUMBER} backend_nexgen_${BUILD_NUMBER} frontend_nexgen_${BUILD_NUMBER} || true
+                    docker network rm reseau_nexgen_${BUILD_NUMBER} || true
+                    docker volume rm donnees_mysql_${BUILD_NUMBER} || true
+                    
+                    # Clean unused resources
+                    docker system prune -f || true
+                """
+            } catch (Exception e) {
+                echo "Warning: Docker cleanup failed: ${e.message}"
+            }
+            cleanWs()
+        }
+    }
+}*/
+    
+    
+    
+//} // End of pipeline block
